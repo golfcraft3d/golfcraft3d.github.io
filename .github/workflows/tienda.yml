@@ -1,0 +1,46 @@
+name: Tienda web
+
+# Arma la tienda desde el repo del agente (golfcraft3d-agente) y la publica en https://golfcraft3d.github.io
+# Corre cada hora y cuando el agente la dispara (aprobación de productos, publicación en Mercado Libre).
+
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: tienda
+  cancel-in-progress: true
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: pirovanojoaquin-tech/golfcraft3d-agente
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Armar la página
+        run: python -m agente.tienda --salida sitio
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: sitio
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
