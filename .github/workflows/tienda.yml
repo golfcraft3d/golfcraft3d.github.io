@@ -1,12 +1,18 @@
 name: Tienda web
 
 # Arma la tienda desde el repo del agente (golfcraft3d-agente) y la publica en https://golfcraft3d.github.io
-# Corre cada hora y cuando el agente la dispara (aprobación de productos, publicación en Mercado Libre).
+# Cada 10 minutos mira si cambió algo que se ve en la web (productos, Mercado Libre, posts de Instagram o la
+# plantilla) comparando una "huella" con la que tiene publicada la página; solo se rearma si cambió.
 
 on:
   schedule:
-    - cron: "41 * * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch:
+    inputs:
+      forzar:
+        description: "Rearmar aunque no haya cambios"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -15,10 +21,39 @@ permissions:
 
 concurrency:
   group: tienda
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+env:
+  AGENTE: pirovanojoaquin-tech/golfcraft3d-agente
 
 jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    outputs:
+      huella: ${{ steps.huella.outputs.huella }}
+      cambio: ${{ steps.huella.outputs.cambio }}
+    steps:
+      - id: huella
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORZAR: ${{ inputs.forzar }}
+        run: |
+          # sha de lo que se ve en la web: carpeta productos/, estado de ML, calendario de Instagram y la plantilla
+          raiz=$(gh api "repos/$AGENTE/git/trees/main" --jq '.tree[] | select(.path=="productos") | .sha')
+          contenido=$(gh api "repos/$AGENTE/contents/contenido?ref=main" --jq '.[] | select(.name=="mercadolibre.json" or .name=="calendario.json") | .sha' | tr '\n' ' ')
+          agente=$(gh api "repos/$AGENTE/contents/agente?ref=main" --jq '.[] | select(.name=="tienda.py" or .name=="plantillas" or .name=="disenio.py") | .sha' | tr '\n' ' ')
+          huella=$(echo "$raiz $contenido $agente" | sha1sum | cut -c1-16)
+          publicada=$(curl -sf https://golfcraft3d.github.io/huella.txt || echo ninguna)
+          echo "huella=$huella" >> "$GITHUB_OUTPUT"
+          if [ "$huella" != "$publicada" ] || [ "$FORZAR" = "true" ]; then
+            echo "cambio=si" >> "$GITHUB_OUTPUT"; echo "Hay cambios ($publicada -> $huella)"
+          else
+            echo "cambio=no" >> "$GITHUB_OUTPUT"; echo "Sin cambios"
+          fi
+
   publicar:
+    needs: revisar
+    if: needs.revisar.outputs.cambio == 'si'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -36,7 +71,9 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Armar la página
-        run: python -m agente.tienda --salida sitio
+        run: |
+          python -m agente.tienda --salida sitio
+          echo "${{ needs.revisar.outputs.huella }}" > sitio/huella.txt
 
       - uses: actions/upload-pages-artifact@v3
         with:
